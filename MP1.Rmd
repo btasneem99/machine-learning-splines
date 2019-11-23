@@ -1,0 +1,276 @@
+---
+title: "SDS/CSC 293 Mini-Project 1: Splines"
+author: "Group 20: Bushra T & Nichole Y."
+date: "Wednesday, February 13^th^, 2019"
+output:
+  html_document:
+    highlight: tango
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: true
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+# Load all your packages here:
+library(tidyverse)
+library(scales)
+
+# Set default behavior for all code chunks here:
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE,
+  fig.width = 16/2, fig.height = 9/2
+)
+
+# Set seed value of random number generator here. This is in order to get
+# "replicable" randomness, so that any results based on random sampling or
+# resampling are replicable everytime you knit this file. Why use a seed value
+# of 76? For no other reason than:
+# https://www.youtube.com/watch?v=xjJ7FheCkCU
+set.seed(76)
+
+
+training <- read_csv("data/train.csv")
+test <- read_csv("data/test.csv")
+sample_submission <- read_csv("data/sample_submission.csv")
+```
+
+#**Data Overview**
+
+```{r}
+ggplot(training, aes(x = LotArea, y=SalePrice))+
+  geom_point()
+```
+
+
+
+#**Minimally viable product**
+
+
+
+## Data wrangling
+```{r}
+training <- training %>%
+  select(SalePrice,LotArea)
+
+fitted_spline_model <- smooth.spline(x = training$LotArea, y = training$SalePrice, df = 10)
+fitted_spline_model_points <- fitted_spline_model %>%
+  broom::augment()
+
+predicted_points <- predict(fitted_spline_model, x = test$LotArea) %>%
+  as_tibble()
+```
+
+## Visualizations
+
+A univariate exploratory visualization of the predictor variable:
+
+```{r}
+ggplot(predicted_points, aes(x = x)) +
+  geom_histogram()
+```
+
+A univariate exploratory visualization of the outcome variable:
+
+```{r}
+ggplot(predicted_points, aes(x = y)) +
+  geom_histogram()
+```
+
+A multivariate exploratory visualization of the *relationship* between the outcome and predictor variable.
+
+```{r}
+ggplot() +
+  geom_line(data = predicted_points, aes(x = x, y = y), col = "pink", size = 1)
+```
+
+Training data points + fitted model points
+
+```{r}
+ggplot(training, aes(x = LotArea, y=SalePrice)) +
+  geom_point()+
+  geom_line(data = fitted_spline_model_points, aes(x = x, y = .fitted), col = "blue", size = 1)
+```
+
+
+#**due diligence**
+
+# Explore choices of df
+
+```{r}
+# Randomly shuffle order of rows:
+house_prices_shuffled <- training %>% 
+  sample_frac(size = 1, replace = FALSE)
+
+house_prices_shuffled[,3]<- c(1:1460)
+
+# Split into train and test:
+train_v <- house_prices_shuffled %>%
+  slice(1:730)
+test_v <- house_prices_shuffled %>%
+  slice(731:1460)
+train_v <- training %>%
+  select(SalePrice,LotArea)
+
+# DF = 5
+
+fitted_spline_model_v5 <- smooth.spline(x = train_v$LotArea, y = train_v$SalePrice, df = 5)
+fitted_spline_model_points_v5 <- fitted_spline_model_v5 %>%
+  broom::augment()
+
+predicted_points_v5 <- predict(fitted_spline_model_v5, x = test_v$LotArea) %>%
+  as_tibble()
+
+
+RMSE_5<- predicted_points_v5%>%
+  summarize(N=n(),
+            RMSLE = sqrt(1/N*sum((log(test_v$SalePrice+1)-log(predicted_points_v5$y+1))^2)))
+RMSE_5$RMSLE
+
+
+# DF = 10
+
+fitted_spline_model_v <- smooth.spline(x = train_v$LotArea, y = train_v$SalePrice, df = 10)
+fitted_spline_model_points_v <- fitted_spline_model_v %>%
+  broom::augment()
+
+predicted_points_v <- predict(fitted_spline_model_v, x = test_v$LotArea) %>%
+  as_tibble()
+
+
+RMSE_10<- predicted_points_v%>%
+  summarize(N=n(),
+            RMSLE = sqrt(1/N*sum((log(test_v$SalePrice+1)-log(predicted_points_v$y+1))^2)))
+RMSE_10$RMSLE
+```
+
+Here we found that the RMSLE value of the model when df = 10 is lower than that of the model when df = 5.
+
+
+
+#**reaching for the stars**
+
+## Crossvalidation from scratch
+
+```{r}
+# df = 10, k=5
+
+RMLSE_list <- list()
+total_RMLSE = 0.0
+for(i in 1:5){
+  lower <- (i-1)*292+1
+  upper <- 292*i
+  cv_training <- house_prices_shuffled[-c(lower:upper),]
+  cv_test <- house_prices_shuffled[lower:upper,]
+  fitted_spline_model_cv <- smooth.spline(x = cv_training$LotArea, y = cv_training$SalePrice, df = 10)
+fitted_spline_model_points_cv <- fitted_spline_model_cv %>%
+  broom::augment()
+predicted_points_cv <- predict(fitted_spline_model_cv, x = cv_test$LotArea) %>%
+  as_tibble()
+RMLSE<- predicted_points_cv%>%
+  summarize(N=n(),
+            RMLSE = sqrt(1/N*sum((log(cv_test$SalePrice+1)-log(predicted_points_cv$y+1))^2)))
+total_RMLSE <- total_RMLSE + RMLSE$RMLSE
+}
+
+
+RMLSE_avg = total_RMLSE/5
+RMLSE_avg
+```
+
+```{r}
+Testing_RMLSE_data<-data.frame("df"=5:99, "RMSLE"=NA)
+
+for(i in 5:99){
+    total_RMLSE_1 <- 0.0
+    for(j in 1:5){
+      lower <- (j-1)*292+1
+      upper <- 292*j
+      cv_training <- house_prices_shuffled[-c(lower:upper),]
+      cv_test <- house_prices_shuffled[lower:upper,]
+      fitted_spline_model_cv <- smooth.spline(x = cv_training$LotArea, y = cv_training$SalePrice, df = i)
+    fitted_spline_model_points_cv <- fitted_spline_model_cv %>%
+      broom::augment()
+    predicted_points_cv <- predict(fitted_spline_model_cv, x = cv_test$LotArea) %>%
+      as_tibble()
+    test_RMLSE<- predicted_points_cv%>%
+      summarize(N=n(),
+                RMLSE = sqrt(1/N*sum((log(cv_test$SalePrice+1)-log(predicted_points_cv$y+1))^2)))
+    total_RMLSE_1 = total_RMLSE_1+test_RMLSE$RMLSE
+    }
+    
+    Testing_RMLSE_data[i-4,2]<- total_RMLSE_1/5
+  
+}
+
+Data_in_RMSLE_order<-Testing_RMLSE_data%>%
+  arrange(RMSLE)
+Data_in_RMSLE_order[1,]
+```
+
+Here we can see that when df = 18, we have the lowest RMSLE value.
+
+### Final Prediction with df = 18
+```{r}
+fitted_spline_model_final <- smooth.spline(x = training$LotArea, y = training$SalePrice, df = 18)
+fitted_spline_model_points_final <- fitted_spline_model %>%
+  broom::augment()
+predicted_points_final <- predict(fitted_spline_model_final, x = test$LotArea) %>%
+  as_tibble()
+```
+
+
+#**Point of diminishing returns**
+
+```{r}
+Training_RMLSE_data<-data.frame("df"=5:99, "RMSLE"=NA)
+
+for(i in 5:99){
+  fitted_spline_model_train <- smooth.spline(x = training$LotArea, y = training$SalePrice, df = i)
+  fitted_spline_model_points_train <- fitted_spline_model_train %>%
+      broom::augment()
+  test_RMLSE<- fitted_spline_model_points_train%>%
+      summarize(N=n(),
+                RMLSE = sqrt(1/N*sum((log(fitted_spline_model_points_train$.fitted+1)-log(fitted_spline_model_points_train$y+1))^2)))
+  Training_RMLSE_data[i-4,2]<- test_RMLSE$RMLSE
+}
+```
+
+
+```{r}
+ggplot()+
+  geom_line(data = Testing_RMLSE_data, aes(x = df, y = RMSLE), color = "orange")+
+  geom_line(data = Training_RMLSE_data, aes(x = df, y = RMSLE), color = "blue")+
+  geom_hline(yintercept=0.3611266)+
+  geom_point(aes(x=18, y=0.3611266), colour="red")
+```
+
+
+#**Submission**
+
+Here is some data wrangling to get the final dataset ready to submit.
+```{r}
+predicted_points_final<- predicted_points_final %>%
+  select(LotArea=x,y)
+submission <- left_join(predicted_points_final,test,by = "LotArea")
+submission<- submission%>%
+  select(Id, SalePrice = y)%>%
+  arrange(Id)
+submission<- unique(submission)
+```
+
+
+## Create your submission CSV
+
+```{r}
+write_csv(submission, "submission.csv")
+```
+
+
+## Screenshot of your Kaggle score
+
+![](bushra_score_screenshot.png){ width=100% }
+
+
